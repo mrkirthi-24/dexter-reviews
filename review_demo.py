@@ -305,6 +305,7 @@ def build_review_context() -> str:
 
 def run_llm(review_context: str):
     """Send context to LLM for bug detection."""
+    import time
     from openai import OpenAI
     api_key = os.environ.get("OPENAI_API_KEY") or getpass.getpass("OpenAI API key: ")
     client = OpenAI(api_key=api_key)
@@ -376,6 +377,7 @@ def run_llm(review_context: str):
         "additionalProperties": False
     }
 
+    start_time = time.time()
     response = client.responses.create(
         model="gpt-5-mini",
         input=prompt,
@@ -390,6 +392,8 @@ def run_llm(review_context: str):
             }
         }
     )
+    end_time = time.time()
+    elapsed_time = end_time - start_time
 
     # Extract the JSON output from the response
     output_text = ""
@@ -403,6 +407,21 @@ def run_llm(review_context: str):
 
     data = json.loads(output_text)
     print(json.dumps(data, indent=2))
+
+    # Display stats
+    print("\n" + "="*80)
+    print("STATISTICS")
+    print("="*80)
+    print(f"Time taken: {elapsed_time:.2f} seconds")
+
+    # Extract token usage from response
+    if hasattr(response, 'usage'):
+        usage = response.usage
+        print(f"Input tokens: {usage.input_tokens if hasattr(usage, 'input_tokens') else 'N/A'}")
+        print(f"Output tokens: {usage.output_tokens if hasattr(usage, 'output_tokens') else 'N/A'}")
+        if hasattr(usage, 'total_tokens'):
+            print(f"Total tokens: {usage.total_tokens}")
+
     return data
 
 if __name__ == "__main__":
