@@ -1,88 +1,127 @@
-# Outside-Diff Impact Slicing for AI Code Reviews
+# AI Code Reviewer - Outside-Diff Impact Slicing Demo
 
-An AI-powered code review tool that finds real bugs by analyzing the boundaries between changed code and its callers/callees. Instead of just looking at the diff, this tool performs **Outside-Diff Impact Slicing** to catch contract mismatches, logic errors, and integration bugs that traditional diff-based reviews miss.
+An AI-powered code review tool that demonstrates **Outside-Diff Impact Slicing** - a technique that finds bugs by analyzing the boundaries between changed code and its callers/callees.
 
-## What It Does
+## The Problem
 
-The tool analyzes git diffs and builds context by:
-- Identifying changed functions/classes in your commits
-- Finding **callees** (definitions your changed code calls)
-- Finding **callers** (code that calls your changed functions)
-- Sending structured context to GPT-5-mini to detect bugs at these boundaries
+Traditional AI code reviews only look at the diff. This misses bugs that occur at the **boundaries** between changed code and unchanged code - like when a function signature changes but callers aren't updated.
 
-This catches bugs like:
-- Functions called with wrong parameter counts after signature changes
-- Callers not updated when function signatures change
-- Contract violations between changed code and its dependencies
+## The Solution
+
+This tool demonstrates three approaches to AI code review:
+
+| Mode | What it sends to LLM | Result |
+|------|---------------------|--------|
+| `diff-only` | Just the git diff | Often misses bugs (no context) |
+| `all-code` | Entire codebase | Finds bugs but uses many tokens |
+| `smart` | Diff + callers/callees | Finds bugs with minimal tokens |
+
+## Quick Start
+
+### 1. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Set up your API key
+
+Create a `.env` file:
+```
+OPENAI_API_KEY=sk-your-key-here
+```
+
+### 3. Run the comparison demo
+
+```bash
+python demo_review.py -r ./demo_project --compare
+```
+
+This runs all three modes and shows a comparison table:
+
+```
+Mode         Bug Found?   Input Tokens   Time (s)  
+--------------------------------------------------
+diff-only    Yes          390            4.85      
+all-code     Yes          10,586         5.60      
+smart        Yes          1,041          2.60      
+--------------------------------------------------
+
+SUMMARY:
+  - Smart mode uses 90.2% fewer tokens than all-code mode
+```
+
+## CLI Usage
+
+```bash
+# Run a single mode
+python demo_review.py -r /path/to/repo -m diff-only
+python demo_review.py -r /path/to/repo -m all-code
+python demo_review.py -r /path/to/repo -m smart
+
+# Compare all three modes
+python demo_review.py -r /path/to/repo --compare
+
+# Show the context being sent to the LLM
+python demo_review.py -r /path/to/repo -m smart --show-context
+```
+
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `-r, --repo` | Path to the git repository to review (required) |
+| `-m, --mode` | Review mode: `diff-only`, `all-code`, or `smart` |
+| `--compare` | Run all three modes and show comparison |
+| `--show-context` | Print the full context being sent to the LLM |
+
+## Demo Project
+
+The `demo_project/` folder contains a sample e-commerce application with an intentional bug:
+
+- `calculator.py` - Has a function `calculate_discount(price, discount_percent, min_purchase)` with 3 parameters
+- `order.py` - Calls `calculate_discount(subtotal, discount_percent)` with only 2 parameters
+
+This simulates a real-world scenario where a function signature was changed but not all callers were updated.
+
+## How It Works
+
+### Smart Mode (Impact Slicing)
+
+1. **Parse the diff** - Extract which lines changed in which files
+2. **Find changed symbols** - Identify functions/classes containing changes
+3. **Build call graph** - Map which files call which functions
+4. **One-hop slice** - Find callers (who calls the changed code) and callees (what the changed code calls)
+5. **Format context** - Structure the diff, changed code, and impact code as markdown
+6. **Send to LLM** - GPT analyzes the context and reports bugs
+
+```
+git diff → changed_lines → symbols_containing_lines → callgraph → one_hop_slice
+                                                                        ↓
+                                                              impact files (callers/callees)
+                                                                        ↓
+                                                              format_context_as_markdown
+                                                                        ↓
+                                                                    run_llm
+```
 
 ## Files
 
-- `review_demo.py` - Main script implementing the Outside-Diff Impact Slicing technique
-- `requirements.txt` - Python dependencies
+| File | Description |
+|------|-------------|
+| `demo_review.py` | CLI tool for comparing review approaches |
+| `review_demo.py` | Core implementation of impact slicing |
+| `demo_project/` | Sample e-commerce project with intentional bug |
+| `requirements.txt` | Python dependencies |
 
 ## Requirements
 
 - Python 3.10+
-- Git repository with at least one commit to diff against
-- OpenAI API key (for GPT-5-mini access)
-
-## Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/coderabbitai/odsc-west-2025.git
-cd odsc-west-2025
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-## Usage
-
-**Note:** This tool currently analyzes Python codebases only.
-
-Run the script from any Python git repository with uncommitted changes or recent commits:
-
-```bash
-python review_demo.py
-```
-
-When prompted, enter your OpenAI API key. The script will:
-1. Extract changed lines from `git diff HEAD~1`
-2. Build a call graph of your Python codebase
-3. Identify impact files (callers and callees)
-4. Generate structured context with the diff, changed code, and impact code
-5. Send the context to GPT-5-mini for bug analysis
-6. Output JSON findings with bug categories, summaries, and suggested fixes
-
-### Output Format
-
-The tool outputs JSON with structured bug reports:
-```json
-{
-  "bugs": [
-    {
-      "changed_file": "path/to/file.py",
-      "changed_lines": "73",
-      "bug_category": "contract-mismatch",
-      "summary": "Function called with wrong parameter types",
-      "comment": "Detailed explanation with evidence...",
-      "diff_fix_suggestion": "--- a/file.py\n+++ b/file.py\n..."
-    }
-  ]
-}
-```
+- Git repository with at least one commit
+- OpenAI API key
 
 ## Limitations
 
 - Currently supports Python codebases only
 - Works best on focused PRs (10-50 changed lines)
-- Large PRs may exceed context window limits
-
-## Learn More
-
-For a detailed explanation of the technique, see the accompanying article on context engineering for AI code reviews.
-
-## Presented at ODSC West 2025
-
-This demo accompanies the talk **"Context Engineering for AI Code Reviews with MCP, LLMs, and Open-Source DevOps Tooling"** at ODSC AI West.
+- Large codebases may hit token limits in all-code mode

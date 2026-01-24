@@ -379,11 +379,12 @@ def run_llm(review_context: str):
 
     start_time = time.time()
     response = client.responses.create(
-        model="gpt-5-mini",
+        model="gpt-4o-mini-2024-07-18",
+        #model="gpt-5-mini",
         input=prompt,
-        reasoning={"effort": "low"},
+        #reasoning={"effort": "low"},
         text={
-            "verbosity": "low",
+             #"verbosity": "low",
             "format": {
                 "type": "json_schema",
                 "name": "bug_report",
@@ -392,6 +393,7 @@ def run_llm(review_context: str):
             }
         }
     )
+    
     end_time = time.time()
     elapsed_time = end_time - start_time
 
