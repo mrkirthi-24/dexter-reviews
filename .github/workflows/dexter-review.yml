@@ -15,6 +15,9 @@ on:
 jobs:
   review:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write   # needed to post PR comments
     steps:
       - uses: YOUR_ORG/dexter-reviews@main
         with:
