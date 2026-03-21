@@ -38,7 +38,7 @@ runs:
       run: |
         pip install -r "$GITHUB_ACTION_PATH/requirements.txt"
 
-    - name: Run Dexter Review
+    - name: Run Dexter Reviews
       shell: bash
       env:
         INPUT_PROVIDER: ${{ inputs.provider }}

@@ -72,9 +72,9 @@ def main() -> int:
 
 def _format_comment(bugs: list) -> str:
     if not bugs:
-        return "## Dexter Review\n\nNo bugs found."
+        return "## Dexter Reviews\n\nNo bugs found."
 
-    lines = ["## Dexter Review\n"]
+    lines = ["## Dexter Reviews\n"]
     for i, b in enumerate(bugs, 1):
         cat = b.get("bug_category", "")
         file_ = b.get("changed_file", "")
