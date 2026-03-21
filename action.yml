@@ -1,0 +1,51 @@
+name: 'Dexter Code Review'
+description: 'AI code review via impact slicing (diff + callers/callees). Supports OpenAI, Anthropic Claude, Google Gemini.'
+branding:
+  icon: 'search'
+  color: 'purple'
+inputs:
+  provider:
+    description: 'LLM provider (openai, anthropic, google)'
+    required: true
+    default: 'openai'
+  openai_api_key:
+    description: 'OpenAI API key (required if provider=openai)'
+    required: false
+  anthropic_api_key:
+    description: 'Anthropic API key (required if provider=anthropic)'
+    required: false
+  google_api_key:
+    description: 'Google AI API key (required if provider=google)'
+    required: false
+  model:
+    description: 'Model override (e.g. gpt-4o, claude-sonnet-4)'
+    required: false
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        pip install -r "$GITHUB_ACTION_PATH/requirements.txt"
+
+    - name: Run Dexter Review
+      shell: bash
+      env:
+        INPUT_PROVIDER: ${{ inputs.provider }}
+        INPUT_OPENAI_API_KEY: ${{ inputs.openai_api_key }}
+        INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        INPUT_GOOGLE_API_KEY: ${{ inputs.google_api_key }}
+        INPUT_MODEL: ${{ inputs.model }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        python "$GITHUB_ACTION_PATH/run_action.py"

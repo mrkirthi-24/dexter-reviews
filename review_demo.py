@@ -1,14 +1,20 @@
 # review_demo.py
 # Outside-Diff Impact Slicing: Find bugs by analyzing callers/callees around the diff.
 
-import os, json, pathlib, subprocess, ast, getpass
+import json
+import pathlib
+import subprocess
+import ast
+import os
+import getpass
 from typing import Dict, Set, List, Tuple
 from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
-def changed_lines(repo=".") -> Dict[str, Set[int]]:
-    """Extract changed line numbers from git diff."""
+
+def changed_lines(repo: str = ".", base_ref: str = "HEAD~1", head_ref: str = "HEAD") -> Dict[str, Set[int]]:
+    """Extract changed line numbers from git diff. For PRs use base_ref/head_ref (e.g. base_sha, head_sha)."""
     diff = subprocess.check_output(
-        ["git", "-C", repo, "diff", "--unified=0", "--no-color", "HEAD~1"]
+        ["git", "-C", repo, "diff", "--unified=0", "--no-color", f"{base_ref}...{head_ref}"]
     ).decode()
     current = None
     changes: Dict[str, Set[int]] = {}
@@ -186,27 +192,30 @@ def format_context_as_markdown(changes, changed_snippets, impact_snippets, diff_
 
     return "\n".join(lines)
 
-def build_review_context() -> str:
-    """Build the context packet for LLM review."""
-    changes = changed_lines()
+
+def build_review_context(
+    repo: str = ".",
+    base_ref: str = "HEAD~1",
+    head_ref: str = "HEAD",
+) -> str:
+    """Build the context packet for LLM review. Expects cwd to be the repo when repo is '.'."""
+    changes = changed_lines(repo, base_ref, head_ref)
     changed_symbols = []
     for f, lines in changes.items():
         if f.endswith(".py") and pathlib.Path(f).exists():
             for name, start, end in symbols_containing_lines(f, lines):
                 changed_symbols.append((f, name, start, end))
 
-    # Get all Python files, excluding virtual environments
-    all_py_files = pathlib.Path(".").rglob("*.py")
-    repo_files = [str(p) for p in all_py_files
-                  if not any(part in p.parts for part in
-                             ['.venv', 'venv', 'env', '.tox', 'site-packages', 'node_modules', '__pycache__'])]
+    all_py_files = pathlib.Path(repo).rglob("*.py")
+    excluded = {'.venv', 'venv', 'env', '.tox', 'site-packages', 'node_modules', '__pycache__'}
+    repo_files = [str(p) for p in all_py_files if not any(part in p.parts for part in excluded)]
 
     cg = callgraph_for_files(repo_files)
     impact_files = set(one_hop_slice(changed_symbols, cg))
 
     # Full git diff
     diff_text = subprocess.check_output(
-        ["git", "diff", "--unified=3", "--no-color", "HEAD~1"]
+        ["git", "-C", repo, "diff", "--unified=3", "--no-color", f"{base_ref}...{head_ref}"]
     ).decode()
 
     # Snippets of changed code (grouped by proximity)
@@ -253,17 +262,14 @@ def build_review_context() -> str:
             # Show CALLEES: definitions that changed code calls
             for node in ast.walk(tree):
                 if isinstance(node, ast.ClassDef) and node.name in calls_from_changed:
-                    # Show __init__ for classes
                     init_line = node.lineno
                     for item in node.body:
                         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == "__init__":
                             init_line = item.lineno
                             break
-
                     snippet_range = range(max(1, init_line - 12), init_line + 13)
                     if f in shown_lines and any(ln in shown_lines[f] for ln in snippet_range):
                         continue
-
                     impact_snippets.append({
                         "file": f,
                         "symbol": node.name,
@@ -274,7 +280,6 @@ def build_review_context() -> str:
                     snippet_range = range(max(1, node.lineno - 10), node.lineno + 11)
                     if f in shown_lines and any(ln in shown_lines[f] for ln in snippet_range):
                         continue
-
                     impact_snippets.append({
                         "file": f,
                         "symbol": node.name,
@@ -285,13 +290,11 @@ def build_review_context() -> str:
             # Show CALLERS: code that calls functions/classes whose SIGNATURES changed
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call):
-                    # Only show if calling a function whose signature actually changed
                     if isinstance(node.func, ast.Name) and node.func.id in changed_signature_names:
                         if hasattr(node, 'lineno'):
                             snippet_range = range(max(1, node.lineno - 8), node.lineno + 9)
                             if f in shown_lines and any(ln in shown_lines[f] for ln in snippet_range):
                                 continue
-
                             impact_snippets.append({
                                 "file": f,
                                 "symbol": f"call to {node.func.id}",
@@ -303,7 +306,8 @@ def build_review_context() -> str:
 
     return format_context_as_markdown(changes, changed_snippets, impact_snippets, diff_text)
 
-def run_llm(review_context: str):
+
+def run_llm(review_context: str) -> dict:
     """Send context to LLM for bug detection."""
     import time
     from openai import OpenAI
@@ -355,10 +359,7 @@ def run_llm(review_context: str):
                             "description": "Category of the bug",
                             "enum": ["contract-mismatch", "logic-error", "concurrency", "resource-management", "error-handling", "security"]
                         },
-                        "summary": {
-                            "type": "string",
-                            "description": "One sentence describing the bug"
-                        },
+                        "summary": {"type": "string", "description": "One sentence describing the bug"},
                         "comment": {
                             "type": "string",
                             "description": "Detailed explanation with evidence from changed code and impact code. Cite specific quotes and explain the contract mismatch or issue."
@@ -380,11 +381,8 @@ def run_llm(review_context: str):
     start_time = time.time()
     response = client.responses.create(
         model="gpt-4o-mini-2024-07-18",
-        #model="gpt-5-mini",
         input=prompt,
-        #reasoning={"effort": "low"},
         text={
-             #"verbosity": "low",
             "format": {
                 "type": "json_schema",
                 "name": "bug_report",
@@ -393,14 +391,11 @@ def run_llm(review_context: str):
             }
         }
     )
-    
-    end_time = time.time()
-    elapsed_time = end_time - start_time
+    elapsed_time = time.time() - start_time
 
     # Extract the JSON output from the response
     output_text = ""
     for item in response.output:
-        # Only process ResponseOutputMessage items (these contain the actual output)
         if isinstance(item, ResponseOutputMessage):
             if item.content is not None:
                 for content in item.content:

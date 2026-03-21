@@ -1,0 +1,28 @@
+# Example: Add this workflow to your project to run Dexter Review on every PR.
+# Copy to your repo: .github/workflows/dexter-review.yml
+#
+# Required: Add your chosen provider's API key as a repo secret.
+#   OpenAI: OPENAI_API_KEY
+#   Anthropic: ANTHROPIC_API_KEY
+#   Google: GOOGLE_API_KEY
+
+name: Dexter Review
+
+on:
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: YOUR_ORG/dexter-reviews@main
+        with:
+          provider: openai
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+        # Or use Anthropic:
+        # provider: anthropic
+        # anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+        # Or use Google:
+        # provider: google
+        # google_api_key: ${{ secrets.GOOGLE_API_KEY }}
