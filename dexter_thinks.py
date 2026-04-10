@@ -11,6 +11,43 @@ from typing import Dict, Set, List, Tuple
 from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
 
+class PythonParseError(Exception):
+    """Raised when a .py file cannot be parsed for impact/call analysis."""
+
+
+def _format_syntax_error(path: str, src: str, err: SyntaxError) -> str:
+    lineno = err.lineno or 1
+    line_body = (err.text or "").rstrip("\n")
+    if not line_body:
+        rows = src.splitlines()
+        if 0 < lineno <= len(rows):
+            line_body = rows[lineno - 1]
+    col = err.offset
+    caret = ""
+    if col is not None and line_body:
+        caret = " " * (col - 1) + "^"
+    loc = f"line {lineno}"
+    if col is not None:
+        loc += f", column {col}"
+    parts = [
+        f"Invalid Python syntax in {path!r} ({loc}): {err.msg}",
+        f"  {line_body}",
+    ]
+    if caret:
+        parts.append(f"  {caret}")
+    parts.append(
+        "Dexter parses Python to map callers and callees around your diff; fix this syntax error, then re-run the review."
+    )
+    return "\n".join(parts)
+
+
+def parse_python(path: str, src: str) -> ast.AST:
+    try:
+        return ast.parse(src, filename=path)
+    except SyntaxError as e:
+        raise PythonParseError(_format_syntax_error(path, src, e)) from None
+
+
 def changed_lines(repo: str = ".", base_ref: str = "HEAD~1", head_ref: str = "HEAD") -> Dict[str, Set[int]]:
     """Extract changed line numbers from git diff. For PRs use base_ref/head_ref (e.g. base_sha, head_sha)."""
     diff = subprocess.check_output(
@@ -34,7 +71,7 @@ def changed_lines(repo: str = ".", base_ref: str = "HEAD~1", head_ref: str = "HE
 def symbols_containing_lines(path: str, lines: Set[int]) -> List[Tuple[str,int,int]]:
     """Find functions/classes that contain the given line numbers."""
     src = pathlib.Path(path).read_text(encoding="utf-8")
-    tree = ast.parse(src)
+    tree = parse_python(path, src)
     out = []
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -46,7 +83,7 @@ def symbols_containing_lines(path: str, lines: Set[int]) -> List[Tuple[str,int,i
 def symbols_with_signature_changes(path: str, lines: Set[int]) -> Set[str]:
     """Find functions/classes whose SIGNATURES were changed (def line itself changed)."""
     src = pathlib.Path(path).read_text(encoding="utf-8")
-    tree = ast.parse(src)
+    tree = parse_python(path, src)
     changed_signatures = set()
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -64,8 +101,7 @@ def symbols_with_signature_changes(path: str, lines: Set[int]) -> Set[str]:
 def calls_in_lines(path: str, lines: Set[int]) -> Set[str]:
     """Extract function/class calls that occur within the specified line numbers."""
     src = pathlib.Path(path).read_text(encoding="utf-8")
-    source_lines = src.splitlines()
-    tree = ast.parse(src)
+    tree = parse_python(path, src)
 
     calls = set()
     for node in ast.walk(tree):
@@ -79,17 +115,14 @@ def callgraph_for_files(files: List[str]) -> dict:
     """Build a simple call graph: which files define/call which symbols."""
     graph = {"calls": {}, "defs": {}}
     for f in files:
-        try:
-            src = pathlib.Path(f).read_text(encoding="utf-8")
-            tree = ast.parse(src)
-            defs = {n.name for n in ast.walk(tree)
-                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
-            calls = {n.func.id for n in ast.walk(tree)
-                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
-            graph["defs"][f] = sorted(defs)
-            graph["calls"][f] = sorted(calls)
-        except Exception:
-            pass
+        src = pathlib.Path(f).read_text(encoding="utf-8")
+        tree = parse_python(f, src)
+        defs = {n.name for n in ast.walk(tree)
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+        calls = {n.func.id for n in ast.walk(tree)
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        graph["defs"][f] = sorted(defs)
+        graph["calls"][f] = sorted(calls)
     return graph
 
 def one_hop_slice(changed_symbols: List[Tuple[str,str,int,int]], cg: dict) -> List[str]:
@@ -255,54 +288,51 @@ def build_review_context(
 
     impact_snippets = []
     for f in sorted(impact_files):
-        try:
-            src = pathlib.Path(f).read_text(encoding="utf-8")
-            tree = ast.parse(src)
+        src = pathlib.Path(f).read_text(encoding="utf-8")
+        tree = parse_python(f, src)
 
-            # Show CALLEES: definitions that changed code calls
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ClassDef) and node.name in calls_from_changed:
-                    init_line = node.lineno
-                    for item in node.body:
-                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == "__init__":
-                            init_line = item.lineno
-                            break
-                    snippet_range = range(max(1, init_line - 12), init_line + 13)
-                    if f in shown_lines and any(ln in shown_lines[f] for ln in snippet_range):
-                        continue
-                    impact_snippets.append({
-                        "file": f,
-                        "symbol": node.name,
-                        "role": "callee",
-                        "text": snippet(f, init_line, pad=12)
-                    })
-                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in calls_from_changed:
-                    snippet_range = range(max(1, node.lineno - 10), node.lineno + 11)
-                    if f in shown_lines and any(ln in shown_lines[f] for ln in snippet_range):
-                        continue
-                    impact_snippets.append({
-                        "file": f,
-                        "symbol": node.name,
-                        "role": "callee",
-                        "text": snippet(f, node.lineno, pad=10)
-                    })
+        # Show CALLEES: definitions that changed code calls
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name in calls_from_changed:
+                init_line = node.lineno
+                for item in node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == "__init__":
+                        init_line = item.lineno
+                        break
+                snippet_range = range(max(1, init_line - 12), init_line + 13)
+                if f in shown_lines and any(ln in shown_lines[f] for ln in snippet_range):
+                    continue
+                impact_snippets.append({
+                    "file": f,
+                    "symbol": node.name,
+                    "role": "callee",
+                    "text": snippet(f, init_line, pad=12)
+                })
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in calls_from_changed:
+                snippet_range = range(max(1, node.lineno - 10), node.lineno + 11)
+                if f in shown_lines and any(ln in shown_lines[f] for ln in snippet_range):
+                    continue
+                impact_snippets.append({
+                    "file": f,
+                    "symbol": node.name,
+                    "role": "callee",
+                    "text": snippet(f, node.lineno, pad=10)
+                })
 
-            # Show CALLERS: code that calls functions/classes whose SIGNATURES changed
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Call):
-                    if isinstance(node.func, ast.Name) and node.func.id in changed_signature_names:
-                        if hasattr(node, 'lineno'):
-                            snippet_range = range(max(1, node.lineno - 8), node.lineno + 9)
-                            if f in shown_lines and any(ln in shown_lines[f] for ln in snippet_range):
-                                continue
-                            impact_snippets.append({
-                                "file": f,
-                                "symbol": f"call to {node.func.id}",
-                                "role": "caller",
-                                "text": snippet(f, node.lineno, pad=8)
-                            })
-        except Exception:
-            pass
+        # Show CALLERS: code that calls functions/classes whose SIGNATURES changed
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id in changed_signature_names:
+                    if hasattr(node, 'lineno'):
+                        snippet_range = range(max(1, node.lineno - 8), node.lineno + 9)
+                        if f in shown_lines and any(ln in shown_lines[f] for ln in snippet_range):
+                            continue
+                        impact_snippets.append({
+                            "file": f,
+                            "symbol": f"call to {node.func.id}",
+                            "role": "caller",
+                            "text": snippet(f, node.lineno, pad=8)
+                        })
 
     return format_context_as_markdown(changes, changed_snippets, impact_snippets, diff_text)
 

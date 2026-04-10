@@ -44,10 +44,16 @@ def main() -> int:
     if action_path not in sys.path:
         sys.path.insert(0, action_path)
 
-    from review_demo import build_review_context
+    from dexter_thinks import PythonParseError, build_review_context
     from llm_providers import run_llm_provider
 
-    context = build_review_context(repo=".", base_ref=base_ref, head_ref=head_ref)
+    try:
+        context = build_review_context(repo=".", base_ref=base_ref, head_ref=head_ref)
+    except PythonParseError as e:
+        summary = str(e).split("\n", 1)[0]
+        print(f"::error title=Invalid Python (Dexter cannot parse this file)::{summary}")
+        print(str(e), file=sys.stderr)
+        return 1
     result = run_llm_provider(provider, context, api_key, model=os.environ.get("INPUT_MODEL"))
 
     bugs = result.get("bugs", [])

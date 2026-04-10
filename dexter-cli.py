@@ -11,14 +11,14 @@ try:
 except ImportError:
     pass
 
-from review_demo import build_review_context, run_llm
+from dexter_thinks import build_review_context, run_llm
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Smart-mode code review (impact slicing: diff + callers/callees)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Example: python demo_review.py -r ./my-repo"
+        epilog="Example: python dexter_cli.py -r ./my-repo"
     )
     parser.add_argument("-r", "--repo", required=True, help="Path to the git repository to review")
     parser.add_argument("--show-context", action="store_true", help="Print context only, skip LLM call")
