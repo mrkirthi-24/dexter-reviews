@@ -44,8 +44,9 @@ def main() -> int:
     if action_path not in sys.path:
         sys.path.insert(0, action_path)
 
+    from dexter_rules import load_project_rules
     from dexter_thinks import PythonParseError, build_review_context
-    from llm_providers import run_llm_provider
+    from llm_providers import print_review_statistics, run_llm_provider
 
     try:
         context = build_review_context(repo=".", base_ref=base_ref, head_ref=head_ref)
@@ -54,7 +55,16 @@ def main() -> int:
         print(f"::error title=Invalid Python (Dexter cannot parse this file)::{summary}")
         print(str(e), file=sys.stderr)
         return 1
-    result = run_llm_provider(provider, context, api_key, model=os.environ.get("INPUT_MODEL"))
+    rules, rules_warning = load_project_rules(".")
+    if rules_warning:
+        print(f"::warning::{rules_warning}")
+    result, elapsed, usage = run_llm_provider(
+        provider,
+        context,
+        api_key,
+        project_rules=rules,
+        model=os.environ.get("INPUT_MODEL"),
+    )
 
     bugs = result.get("bugs", [])
     body = _format_comment(bugs)
@@ -72,6 +82,8 @@ def main() -> int:
             print(f"::warning::Could not post PR comment: {e}")
     else:
         print(body)
+
+    print_review_statistics(elapsed, usage, result)
 
     return 0
 

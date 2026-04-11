@@ -1,14 +1,11 @@
 # review_demo.py
 # Outside-Diff Impact Slicing: Find bugs by analyzing callers/callees around the diff.
 
-import json
 import pathlib
 import subprocess
 import ast
-import os
-import getpass
+import sys
 from typing import Dict, Set, List, Tuple
-from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
 
 class PythonParseError(Exception):
@@ -335,127 +332,3 @@ def build_review_context(
                         })
 
     return format_context_as_markdown(changes, changed_snippets, impact_snippets, diff_text)
-
-
-def run_llm(review_context: str) -> dict:
-    """Send context to LLM for bug detection."""
-    import time
-    from openai import OpenAI
-    api_key = os.environ.get("OPENAI_API_KEY") or getpass.getpass("OpenAI API key: ")
-    client = OpenAI(api_key=api_key)
-
-    prompt = (
-        "You are a senior code reviewer analyzing a PR for bugs. "
-        "You will receive structured markdown with THREE sections:\n\n"
-        "1. Git Diff: Shows what changed (in <diff> tags)\n"
-        "2. Changed Code: Snippets from modified files (in <file type=\"changed\"> tags)\n"
-        "3. Impact Code: Both CALLEES (definitions the changed code calls) and CALLERS (code that calls the changed symbols). "
-        "These show contracts/signatures and usage patterns.\n\n"
-        "YOUR TASK: Find real bugs in the CHANGED CODE (type=\"changed\" files). Look for:\n"
-        "- CONTRACT MISMATCHES: Wrong number of parameters, missing arguments, signature changes where callers weren't updated\n"
-        "- LOGIC ERRORS: Off-by-one errors, incorrect conditionals, wrong operators, missing edge case handling\n"
-        "- CONCURRENCY ISSUES: Race conditions, deadlocks, missing synchronization, unsafe shared state access\n"
-        "- RESOURCE MANAGEMENT: Leaks, missing cleanup, incorrect resource lifetimes\n"
-        "- ERROR HANDLING: Unhandled exceptions, incorrect error propagation, silent failures\n"
-        "- SECURITY: Injection vulnerabilities, missing validation, unsafe operations\n\n"
-        "CRITICAL: Your findings MUST reference the CHANGED files (type=\"changed\"), NOT the impact files. "
-        "The impact files are provided only as reference to understand contracts/signatures. "
-        "Report the specific line number in the CHANGED file where the bug occurs.\n\n"
-        "Focus on real bugs, not style. If nothing critical is found, return an empty bugs array. "
-        "For diff_fix_suggestion, provide a unified diff format if you have a concrete fix, or empty string if not.\n\n"
-        "Review the following context:\n\n" + review_context
-    )
-
-    # Define JSON schema for structured output
-    json_schema = {
-        "type": "object",
-        "properties": {
-            "bugs": {
-                "type": "array",
-                "description": "Array of bug findings. Empty array if no bugs found.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "changed_file": {
-                            "type": "string",
-                            "description": "Path to the CHANGED file where the bug exists (must be from type='changed' files, not impact files)"
-                        },
-                        "changed_lines": {
-                            "type": "string",
-                            "description": "Line number or range in the changed file (e.g., '55' or '55-57')"
-                        },
-                        "bug_category": {
-                            "type": "string",
-                            "description": "Category of the bug",
-                            "enum": ["contract-mismatch", "logic-error", "concurrency", "resource-management", "error-handling", "security"]
-                        },
-                        "summary": {"type": "string", "description": "One sentence describing the bug"},
-                        "comment": {
-                            "type": "string",
-                            "description": "Detailed explanation with evidence from changed code and impact code. Cite specific quotes and explain the contract mismatch or issue."
-                        },
-                        "diff_fix_suggestion": {
-                            "type": "string",
-                            "description": "Unified diff format showing the fix (e.g., '--- a/file.py\\n+++ b/file.py\\n@@ -55,1 +55,1 @@\\n-old line\\n+new line'). Use empty string if no concrete fix available."
-                        }
-                    },
-                    "required": ["changed_file", "changed_lines", "bug_category", "summary", "comment", "diff_fix_suggestion"],
-                    "additionalProperties": False
-                }
-            }
-        },
-        "required": ["bugs"],
-        "additionalProperties": False
-    }
-
-    start_time = time.time()
-    response = client.responses.create(
-        model="gpt-4o-mini-2024-07-18",
-        input=prompt,
-        text={
-            "format": {
-                "type": "json_schema",
-                "name": "bug_report",
-                "schema": json_schema,
-                "strict": True
-            }
-        }
-    )
-    elapsed_time = time.time() - start_time
-
-    # Extract the JSON output from the response
-    output_text = ""
-    for item in response.output:
-        if isinstance(item, ResponseOutputMessage):
-            if item.content is not None:
-                for content in item.content:
-                    if isinstance(content, ResponseOutputText):
-                        output_text += content.text
-
-    data = json.loads(output_text)
-    print(json.dumps(data, indent=2))
-
-    # Display stats
-    print("\n" + "="*80)
-    print("STATISTICS")
-    print("="*80)
-    print(f"Time taken: {elapsed_time:.2f} seconds")
-
-    # Extract token usage from response
-    if hasattr(response, 'usage'):
-        usage = response.usage
-        print(f"Input tokens: {usage.input_tokens if hasattr(usage, 'input_tokens') else 'N/A'}")
-        print(f"Output tokens: {usage.output_tokens if hasattr(usage, 'output_tokens') else 'N/A'}")
-        if hasattr(usage, 'total_tokens'):
-            print(f"Total tokens: {usage.total_tokens}")
-
-    return data
-
-if __name__ == "__main__":
-    print("Building review context from local diff…")
-    rc = build_review_context()
-    print(rc)
-    print("\n" + "="*80)
-    print("Calling the model…")
-    print("="*80 + "\n")
-    run_llm(rc)

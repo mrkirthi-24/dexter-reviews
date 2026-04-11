@@ -33,13 +33,23 @@ jobs:
 ```bash
 pip install -r requirements.txt
 # Set OPENAI_API_KEY in .env
-python demo_review.py -r ./your-repo
+python dexter-cli.py -r ./your-repo
 ```
 
 | Flag             | Description                    |
 | ---------------- | ------------------------------ |
 | `-r, --repo`     | Path to git repo (required)    |
 | `--show-context` | Print context only, no LLM     |
+| `--provider`     | `openai`, `anthropic`, `google`|
+| `--model`        | Optional model override        |
+
+## Project-Specific Rules
+
+Dexter can load repository-specific review rules from:
+
+`/.github/workflows/DEXTER_RULES.md`
+
+If this file exists, its content is injected into the review prompt and violations can be reported as `project-rule`.
 
 ## How It Works
 
