@@ -198,13 +198,12 @@ def run_anthropic(review_context: str, api_key: str, model: str = AnthropicModel
         max_tokens=4096,
         messages=[
             {"role": "user", "content": build_prompt(review_context, project_rules)},
-            {"role": "assistant", "content": "{"},
         ],
     )
     elapsed = time.perf_counter() - t0
     usage = getattr(msg, "usage", None)
     text = msg.content[0].text if msg.content else ""
-    return _parse_json_response("{" + text), elapsed, usage
+    return _parse_json_response(text), elapsed, usage
 
 
 def run_google(review_context: str, api_key: str, model: str = GoogleModel.GEMINI_3_1_PRO_PREVIEW, project_rules: str | None = None) -> tuple[dict, float, Any]:
