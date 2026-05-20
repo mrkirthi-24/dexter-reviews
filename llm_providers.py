@@ -92,12 +92,33 @@ Respond with ONLY valid JSON matching this schema, no other text:
 
 
 def _parse_json_response(text: str) -> dict:
-    """Extract and parse JSON from LLM response (handles markdown code blocks)."""
-    text = text.strip()
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-    if match:
-        text = match.group(1).strip()
-    return json.loads(text)
+    """Extract and parse JSON from LLM response.
+
+    Tolerates markdown code fences and surrounding prose by falling back to
+    the substring between the first ``{`` and the last ``}``.
+    """
+    if not text or not text.strip():
+        raise ValueError("LLM returned empty response; expected JSON.")
+    stripped = text.strip()
+
+    fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", stripped)
+    if fence:
+        stripped = fence.group(1).strip()
+
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(stripped[start : end + 1])
+            except json.JSONDecodeError:
+                pass
+        snippet = text[:500].replace("\n", "\\n")
+        raise ValueError(
+            f"LLM response was not valid JSON. First 500 chars: {snippet!r}"
+        )
 
 
 def build_prompt(review_context: str, project_rules: str | None = None) -> str:
@@ -175,12 +196,15 @@ def run_anthropic(review_context: str, api_key: str, model: str = AnthropicModel
     msg = client.messages.create(
         model=model,
         max_tokens=4096,
-        messages=[{"role": "user", "content": build_prompt(review_context, project_rules)}],
+        messages=[
+            {"role": "user", "content": build_prompt(review_context, project_rules)},
+            {"role": "assistant", "content": "{"},
+        ],
     )
     elapsed = time.perf_counter() - t0
     usage = getattr(msg, "usage", None)
     text = msg.content[0].text if msg.content else ""
-    return _parse_json_response(text), elapsed, usage
+    return _parse_json_response("{" + text), elapsed, usage
 
 
 def run_google(review_context: str, api_key: str, model: str = GoogleModel.GEMINI_3_1_PRO_PREVIEW, project_rules: str | None = None) -> tuple[dict, float, Any]:
