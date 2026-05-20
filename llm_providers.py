@@ -192,18 +192,27 @@ def run_anthropic(review_context: str, api_key: str, model: str = AnthropicModel
     import anthropic
 
     client = anthropic.Anthropic(api_key=api_key)
+    tool = {
+        "name": "report_bugs",
+        "description": "Report the bugs found in the changed code.",
+        "input_schema": _json_schema(),
+    }
     t0 = time.perf_counter()
     msg = client.messages.create(
         model=model,
         max_tokens=4096,
+        tools=[tool],
+        tool_choice={"type": "tool", "name": "report_bugs"},
         messages=[
             {"role": "user", "content": build_prompt(review_context, project_rules)},
         ],
     )
     elapsed = time.perf_counter() - t0
     usage = getattr(msg, "usage", None)
-    text = msg.content[0].text if msg.content else ""
-    return _parse_json_response(text), elapsed, usage
+    for block in msg.content or []:
+        if getattr(block, "type", None) == "tool_use" and block.name == "report_bugs":
+            return block.input, elapsed, usage
+    raise ValueError("Anthropic response did not include the expected report_bugs tool call.")
 
 
 def run_google(review_context: str, api_key: str, model: str = GoogleModel.GEMINI_3_1_PRO_PREVIEW, project_rules: str | None = None) -> tuple[dict, float, Any]:
