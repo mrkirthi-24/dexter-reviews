@@ -67,6 +67,7 @@ def main() -> int:
     )
 
     bugs = result.get("bugs", [])
+    bugs = _filter_and_rank(bugs)
     body = _format_comment(bugs)
 
     token = os.environ.get("GITHUB_TOKEN")
@@ -88,6 +89,20 @@ def main() -> int:
     return 0
 
 
+_SEVERITY_ORDER = {"critical": 0, "major": 1, "minor": 2}
+_CONFIDENCE_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+
+def _filter_and_rank(bugs: list) -> list:
+    """Drop low-confidence findings (precision over recall) and rank by severity then confidence."""
+    kept = [b for b in bugs if str(b.get("confidence", "")).lower() != "low"]
+    kept.sort(key=lambda b: (
+        _SEVERITY_ORDER.get(str(b.get("severity", "")).lower(), 3),
+        _CONFIDENCE_ORDER.get(str(b.get("confidence", "")).lower(), 3),
+    ))
+    return kept
+
+
 def _format_comment(bugs: list) -> str:
     if not bugs:
         return "## Dexter Reviews\n\nNo bugs found."
@@ -95,15 +110,25 @@ def _format_comment(bugs: list) -> str:
     lines = ["## Dexter Reviews\n"]
     for i, b in enumerate(bugs, 1):
         cat = b.get("bug_category", "")
+        sev = b.get("severity", "")
+        conf = b.get("confidence", "")
         file_ = b.get("changed_file", "")
         ln = b.get("changed_lines", "")
         summary = b.get("summary", "")
         comment = b.get("comment", "")
+        evidence = b.get("evidence", "").strip()
         fix = b.get("diff_fix_suggestion", "").strip()
         lines.append(f"### {i}. {summary}")
         lines.append(f"- **File:** `{file_}` (lines {ln})")
-        lines.append(f"- **Category:** {cat}")
+        meta = f"- **Category:** {cat}"
+        if sev:
+            meta += f" · **Severity:** {sev}"
+        if conf:
+            meta += f" · **Confidence:** {conf}"
+        lines.append(meta)
         lines.append(f"- **Details:** {comment}")
+        if evidence:
+            lines.append(f"- **Evidence:** {evidence}")
         if fix:
             lines.append(f"```diff\n{fix}\n```")
         lines.append("")
