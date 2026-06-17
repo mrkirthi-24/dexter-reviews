@@ -84,10 +84,23 @@ YOUR TASK: Find real bugs in the CHANGED CODE (type="changed" files). Look for:
 
 CRITICAL: Your findings MUST reference the CHANGED files (type="changed"), NOT the impact files. Report the specific line number in the CHANGED file where the bug occurs.
 
-Focus on real bugs. If project rules are provided, enforce them as hard requirements and use "project-rule" when applicable. If nothing critical is found, return an empty bugs array. For diff_fix_suggestion, provide a unified diff format if you have a concrete fix, or empty string if not.
+EVIDENCE RULES — these prevent false positives and hallucination. Follow them strictly:
+- Report a bug ONLY if you can point to the specific evidence in the provided context that proves it. Put that proof in the "evidence" field (quote the exact line(s) from the diff, changed code, CALLEES, or CALLERS).
+- DO NOT GUESS SIGNATURES YOU CANNOT SEE. For contract-mismatch / wrong-argument findings, the callee's definition MUST appear in the CALLEES section. If the called function/class is from an external library or is otherwise NOT shown in CALLEES, you do not know its real signature — DO NOT flag it. Assume the existing call works.
+- Do not infer the behavior of code that is not shown. Absence of context is NOT evidence of a bug.
+- Prefer false negatives over false positives. A wrong flag costs the team more than a missed nit. When unsure, lower the confidence or omit the finding.
+
+CONFIDENCE — set "confidence" honestly:
+- "high": evidence in context directly proves the bug; a competent engineer would agree it must be fixed.
+- "medium": strong signal but depends on an assumption you cannot fully verify from the context.
+- "low": speculative or style-level. (Low-confidence findings are filtered out before posting, so only include one if you genuinely believe it.)
+
+SEVERITY — set "severity": "critical" (crash, data loss, security hole, broken contract), "major" (wrong result in a real path), or "minor" (edge case, hygiene).
+
+Focus on real bugs. If project rules are provided, enforce them as hard requirements and use "project-rule" when applicable. If you find no bug you can prove from the provided context, return an empty bugs array — that is a valid and good result. For diff_fix_suggestion, provide a unified diff format ONLY if you have a concrete, correct fix that you can verify against the shown context; otherwise empty string.
 
 Respond with ONLY valid JSON matching this schema, no other text:
-{"bugs":[{"changed_file":"string","changed_lines":"string","bug_category":"contract-mismatch|logic-error|concurrency|resource-management|error-handling|security|project-rule","summary":"string","comment":"string","diff_fix_suggestion":"string"}]}
+{"bugs":[{"changed_file":"string","changed_lines":"string","bug_category":"contract-mismatch|logic-error|concurrency|resource-management|error-handling|security|project-rule","severity":"critical|major|minor","confidence":"high|medium|low","summary":"string","comment":"string","evidence":"string","diff_fix_suggestion":"string"}]}
 """
 
 
@@ -150,11 +163,14 @@ def _json_schema() -> dict[str, Any]:
                         "changed_file": {"type": "string"},
                         "changed_lines": {"type": "string"},
                         "bug_category": {"type": "string", "enum": BUG_CATEGORIES},
+                        "severity": {"type": "string", "enum": ["critical", "major", "minor"]},
+                        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
                         "summary": {"type": "string"},
                         "comment": {"type": "string"},
+                        "evidence": {"type": "string"},
                         "diff_fix_suggestion": {"type": "string"},
                     },
-                    "required": ["changed_file", "changed_lines", "bug_category", "summary", "comment", "diff_fix_suggestion"],
+                    "required": ["changed_file", "changed_lines", "bug_category", "severity", "confidence", "summary", "comment", "evidence", "diff_fix_suggestion"],
                     "additionalProperties": False,
                 },
             }
@@ -174,6 +190,7 @@ def run_openai(review_context: str, api_key: str, model: str = OpenAIModel.GPT_4
     response = client.responses.create(
         model=model,
         input=build_prompt(review_context, project_rules),
+        temperature=0,
         text={"format": {"type": "json_schema", "name": "bug_report", "schema": _json_schema(), "strict": True}},
     )
     elapsed = time.perf_counter() - t0
@@ -200,7 +217,8 @@ def run_anthropic(review_context: str, api_key: str, model: str = AnthropicModel
     t0 = time.perf_counter()
     msg = client.messages.create(
         model=model,
-        max_tokens=4096,
+        max_tokens=8192,
+        temperature=0,
         tools=[tool],
         tool_choice={"type": "tool", "name": "report_bugs"},
         messages=[
