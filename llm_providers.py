@@ -185,14 +185,26 @@ def run_openai(review_context: str, api_key: str, model: str = OpenAIModel.GPT_4
     from openai import OpenAI
     from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
+    from openai import BadRequestError
+
     client = OpenAI(api_key=api_key)
+    request_kwargs = {
+        "model": model,
+        "input": build_prompt(review_context, project_rules),
+        "temperature": 0,
+        "text": {"format": {"type": "json_schema", "name": "bug_report", "schema": _json_schema(), "strict": True}},
+    }
     t0 = time.perf_counter()
-    response = client.responses.create(
-        model=model,
-        input=build_prompt(review_context, project_rules),
-        temperature=0,
-        text={"format": {"type": "json_schema", "name": "bug_report", "schema": _json_schema(), "strict": True}},
-    )
+    try:
+        response = client.responses.create(**request_kwargs)
+    except BadRequestError as e:
+        # Reasoning models (e.g. gpt-5.x) reject `temperature`. Retry once without it.
+        if e.param == "temperature" or "temperature" in str(e):
+            request_kwargs.pop("temperature", None)
+            print(f"Model '{model}' rejected temperature; retrying without it.")
+            response = client.responses.create(**request_kwargs)
+        else:
+            raise
     elapsed = time.perf_counter() - t0
     usage = getattr(response, "usage", None)
     output_text = ""
